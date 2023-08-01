@@ -13,6 +13,28 @@ import (
 func CompactionTransformers(manifest *mf.Manifest) []mf.Transformer {
 	return []mf.Transformer{func(u *unstructured.Unstructured) error {
 
+		if u.GetKind() == "Deployment" && u.GetName() == "activator" {
+			var obj metav1.Object
+			activator := &appsv1.Deployment{}
+			if err := scheme.Scheme.Convert(u, activator, nil); err != nil {
+				return err
+			}
+			obj = activator
+			for i, c := range activator.Spec.Template.Spec.Containers {
+				if c.Name == "activator" {
+					c.Env = append(c.Env, corev1.EnvVar{
+						Name:  "K_AUTOSCALER_SERVICE",
+						Value: "controller",
+					})
+					activator.Spec.Template.Spec.Containers[i] = c
+				}
+			}
+
+			if err := scheme.Scheme.Convert(obj, u, nil); err != nil {
+				return err
+			}
+		}
+
 		if u.GetKind() == "Service" && u.GetName() == "controller" {
 			var obj metav1.Object
 			controllerSrv := &corev1.Service{}
