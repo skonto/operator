@@ -19,6 +19,7 @@ package knativeserving
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	mf "github.com/manifestival/manifestival"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +38,8 @@ import (
 	"knative.dev/operator/pkg/reconciler/knativeserving/security"
 	"knative.dev/operator/pkg/reconciler/manifests"
 )
+
+const compactionAnnotationName = "serving.knative.dev/compaction"
 
 // Reconciler implements controller.Reconciler for Knativeserving resources.
 type Reconciler struct {
@@ -122,6 +125,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, ks *v1beta1.KnativeServi
 		common.AppendAdditionalManifests,
 		r.appendExtensionManifests,
 		r.transform,
+		compaction,
 		manifests.Install,
 		common.CheckDeployments,
 		common.DeleteObsoleteResources(ctx, ks, r.installed),
@@ -143,7 +147,27 @@ func (r *Reconciler) transform(ctx context.Context, manifest *mf.Manifest, comp 
 	extra = append(extra, ingress.Transformers(ctx, instance)...)
 	extra = append(extra, ingress.IngressServiceTransform(instance))
 	extra = append(extra, security.Transformers(ctx, instance)...)
+
+	annos := comp.GetAnnotations()
+	if val, ok := annos[compactionAnnotationName]; ok {
+		if b, _ := strconv.ParseBool(val); b {
+			extra = append(extra, CompactionTransformers(manifest)...)
+		}
+	}
 	return common.Transform(ctx, manifest, instance, extra...)
+}
+
+func compaction(ctx context.Context, manifest *mf.Manifest, comp base.KComponent) error {
+	annos := comp.GetAnnotations()
+	if val, ok := annos[compactionAnnotationName]; ok {
+		if b, _ := strconv.ParseBool(val); b {
+			autoscalerPred := mf.All(mf.ByKind("Deployment"), mf.ByName("autoscaler"))
+			autoscalerServPred := mf.All(mf.ByKind("Service"), mf.ByName("autoscaler"))
+			// remove autoscaler deployment and service
+			*manifest = manifest.Filter(mf.Not(autoscalerPred), mf.Not(autoscalerServPred))
+		}
+	}
+	return nil
 }
 
 // injectNamespace mutates the namespace of all installed resources
